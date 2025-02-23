@@ -42,21 +42,42 @@ def verify_login():
         sys.exit()
 
 def close_popups():
-    """Close any pop-ups that might appear."""
+    max_attempts = 5
+    for _ in range(max_attempts):
+        try:
+            close_buttons = driver.find_elements(By.CSS_SELECTOR, '.close, [data-dismiss="modal"], .modal-close')
+            overlays = driver.find_elements(By.CSS_SELECTOR, '.modal-backdrop.fade.in')
+            
+            if not close_buttons and not overlays:
+                break
+
+            for btn in close_buttons:
+                try:
+                    driver.execute_script("arguments[0].click();", btn)
+                    pprint(f"🗙 Closed popup: {btn.text[:20]}...", style='b yellow')
+                    sleep(0.5)
+                except:
+                    continue
+
+            # Remove modal backdrops
+            for overlay in overlays:
+                driver.execute_script("arguments[0].remove();", overlay)
+
+            sleep(1)  # Allow new popups to appear
+
+        except Exception as e:
+            pprint(f"Popup error: {str(e)}", style='b red')
+            break
+
     try:
-        sleep(2)
-        popups = wait.until(
-            EC.presence_of_all_elements_located((By.CLASS_NAME, 'close'))
-        )
-        pprint(f"{len(popups)} Pop-ups found!", style='b yellow')
-        for close_btn in popups:
-            try:
-                close_btn.click()
-                pprint('✔', style='b green', end=' ')
-            except:
-                pprint('✘', style='b red', end=' ')
+        driver.execute_script("""
+            document.querySelectorAll('.modal-backdrop').forEach(e => e.remove());
+            document.querySelectorAll('.modal').forEach(e => e.remove());
+        """)
     except:
-        pprint("No Pop-ups found!", style='b green')
+        pass
+
+    pprint("All popups cleared!", style='b green')
 
 def select_my_faculty():
     """Navigate to the faculty feedback section."""
@@ -75,77 +96,101 @@ def fill():
     driver.execute_script(script)
 
 def yesno():
-    """Answer yes/no questions."""
-    for i in range(1, 4):
-        driver.execute_script(f"document.querySelectorAll('input[id=\"rdbQuestion{i}\"]')[0].click();")
+    """Answer all yes/no questions (4 questions)."""
+    question_ids = [1, 2, 4, 5]
+    for q_id in question_ids:
+        try:
+            script = f"""
+                var radios = document.querySelectorAll('input[id="rdbQuestion{q_id}"][value="1"]');
+                if (radios.length > 0) radios[0].click();
+            """
+            driver.execute_script(script)
+            sleep(0.5)
+        except Exception as e:
+            pprint(f"Error answering question {q_id}: {e}", style='b red')
 
 def comment():
-    """Enter comments."""
-    comment_box = wait.until(EC.presence_of_element_located((By.ID, 'FeedbackRating_Comments')))
-    comment_box.send_keys(comments)
+    try:
+        comment_box = wait.until(EC.element_to_be_clickable((By.ID, 'FeedbackRating_Comments')))
+        comment_box.clear()
+        comment_box.send_keys(comments)
+        sleep(0.5)
+    except Exception as e:
+        pprint(f"Error filling comments: {e}", style='b red')
 
 def submit():
-    """Submit feedback."""
-    submit_button = wait.until(EC.element_to_be_clickable((By.ID, 'btnSubmit')))
-    submit_button.click()
+    """Submit feedback and wait for confirmation."""
+    try:
+        submit_button = wait.until(EC.element_to_be_clickable((By.ID, 'btnSubmit')))
+        submit_button.click()
+        wait.until(EC.invisibility_of_element_located((By.ID, 'btnSubmit')))
+        sleep(2)
+    except Exception as e:
+        pprint(f"Error submitting feedback: {e}", style='b red')
 
 def scroll_to_top():
-    """Scroll back to the top of the page."""
     driver.execute_script("window.scrollTo(0, 0);")
     sleep(1) 
 
 def fill_feedback():
     """Fill feedback for all subjects."""
-    filled_subjects = set()  
+    filled_subjects = set()
 
-    while True:  
+    while True:
         try:
-            # Get the list of subjects
             subjects = wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, 'subject')))
-            unfilled_feedback_found = False  
+            unfilled_feedback_found = False
 
-            for subj in subjects:
-                sleep(1)  
-                subj.click()  
-                sleep(1)  
-
-                subj_name = subj.text  
-                if subj_name in filled_subjects:
-                    continue  
-
+            for index in range(len(subjects)):
                 try:
-                    # Attempt to find and click the feedback link
-                    feedback_link = driver.find_element(By.CSS_SELECTOR, 
-                                                        '[title="Please click here to give faculty feedback"]')
-                    feedback_link.click()
-                    sleep(1)  
-                    fill()  
-                    yesno()  
-                    comment()  
-                    submit()  
-                    pprint(f"Feedback submitted for {subj_name}!", style='b green')
-                    filled_subjects.add(subj_name)  
-                    unfilled_feedback_found = True  
-                    sleep(2)  
+                    # Re-fetch subject element each time
+                    current_subj = wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, 'subject')))[index]
+                    subj_name = current_subj.text
+                    
+                    if subj_name in filled_subjects:
+                        continue
 
-                    # Scroll to the top after submission to detect remaining subjects
-                    scroll_to_top()
+                    current_subj.click()
+                    sleep(1)
+
+                    try:
+                        feedback_link = wait.until(EC.element_to_be_clickable(
+                            (By.CSS_SELECTOR, '[title="Please click here to give faculty feedback"]')
+                        ))
+                        feedback_link.click()
+                        sleep(2)
+
+                        # Fill the feedback
+                        fill()
+                        yesno()
+                        comment()
+                        submit()
+                        
+                        pprint(f"Feedback submitted for {subj_name}!", style='b green')
+                        filled_subjects.add(subj_name)
+                        unfilled_feedback_found = True
+                        
+                        select_my_faculty()
+                        sleep(2)
+                        scroll_to_top()
+
+                    except Exception as e:
+                        pprint(f"Error processing {subj_name}: {str(e)}", style='b red')
+                        continue
 
                 except Exception as e:
-                    # Log the error but continue processing the next subject
-                    pprint(f"Error while processing feedback for {subj_name}: {e}", style='b red')
-                    continue  
+                    pprint(f"Error accessing subject {index}: {str(e)}", style='b red')
+                    continue
 
-            # If no new feedback was filled during this iteration, check if we should exit
             if not unfilled_feedback_found:
-                pprint("All feedbacks (if available) have been submitted!", style='b green')
-                break  
+                pprint("All feedback submitted successfully!", style='b green')
+                break
 
         except Exception as e:
-            # Log the error and continue the loop without exiting
-            pprint(f"Unexpected error while processing subjects: {e}", style='b red')
-            sleep(2)  
-
+            pprint(f"Error in main loop: {str(e)}", style='b red')
+            sleep(2)
+            break
+        
 def main():
     """Main function to execute the script."""
     try:
